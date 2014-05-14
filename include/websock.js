@@ -55,7 +55,7 @@ var api = {},         // Public API
     mode = 'base64',  // Current WebSocket mode: 'binary', 'base64'
     rQ = [],          // Receive queue
     rQi = 0,          // Receive queue index
-    rQmax = 10000,    // Max receive queue size before compacting
+    rQmax = 1048576,    // Max receive queue size before compacting
     sQ = [],          // Send queue
 
     eventHandlers = {

@@ -46,6 +46,7 @@ var that           = {},  // Public API methods
     rfb_max_version= 3.8,
     rfb_auth_scheme= '',
     rfb_tightvnc   = false,
+    rfb_atenvnc    = true,
 
     rfb_xvp_ver    = 0,
 
@@ -60,6 +61,7 @@ var that           = {},  // Public API methods
         ['RAW',              0x00 ],
         ['DesktopSize',      -223 ],
         ['Cursor',           -239 ],
+        ['HermonVideo',       89  ],
 
         // Psuedo-encoding settings
         //['JPEG_quality_lo',   -32 ],
@@ -72,7 +74,7 @@ var that           = {},  // Public API methods
         ],
 
     encHandlers    = {},
-    encNames       = {}, 
+    encNames       = {},
     encStats       = {},     // [rectCnt, rectCntTot]
 
     ws             = null,   // Websock object
@@ -92,12 +94,14 @@ var that           = {},  // Public API methods
         bytes          : 0,
         x              : 0,
         y              : 0,
-        width          : 0, 
+        width          : 0,
         height         : 0,
         encoding       : 0,
         subencoding    : -1,
         background     : null,
-        zlibs          : []   // TIGHT zlib streams
+        zlibs          : [],  // TIGHT zlib streams
+	unknown	       : 0,
+        dataLength     : 0,
     },
 
     fb_Bpp         = 4,
@@ -294,7 +298,7 @@ function constructor() {
 function connect() {
     Util.Debug(">> RFB.connect");
     var uri;
-    
+
     if (typeof UsingSocketIO !== "undefined") {
         uri = "http";
     } else {
@@ -327,7 +331,7 @@ init_vars = function() {
     for (i=0; i < encodings.length; i+=1) {
         encStats[encodings[i][1]][0] = 0;
     }
-    
+
     for (i=0; i < 4; i++) {
         //FBU.zlibs[i] = new InflateStream();
         FBU.zlibs[i] = new TINF();
@@ -372,7 +376,7 @@ print_stats = function() {
  *   fatal        - failed to load page, or fatal error
  *
  * RFB protocol initialization states:
- *   ProtocolVersion 
+ *   ProtocolVersion
  *   Security
  *   Authentication
  *   password     - waiting for password, not part of RFB
@@ -389,7 +393,7 @@ updateState = function(state, statusMsg) {
         return;
     }
 
-    /* 
+    /*
      * These are disconnected states. A previous connect may
      * asynchronously cause a connection so make sure we are closed.
      */
@@ -617,9 +621,9 @@ mouseMove = function(x, y) {
 
     if (conf.view_only) { return; } // View only, skip mouse events
 
-    mouse_arr = mouse_arr.concat(
-            pointerEvent(display.absX(x), display.absY(y)));
-    
+    //mouse_arr = mouse_arr.concat(
+    //        pointerEvent(display.absX(x), display.absY(y)));
+
     checkEvents();
 };
 
@@ -660,7 +664,7 @@ init_msg = function() {
             default:
                 return fail("Invalid server version " + sversion);
         }
-        if (is_repeater) { 
+        if (is_repeater) {
             repeaterID = conf.repeaterID;
             while (repeaterID.length < 250) {
                 repeaterID += "\0";
@@ -668,7 +672,7 @@ init_msg = function() {
             ws.send_string(repeaterID);
             break;
         }
-        if (rfb_version > rfb_max_version) { 
+        if (rfb_version > rfb_max_version) {
             rfb_version = rfb_max_version;
         }
 
@@ -689,7 +693,7 @@ init_msg = function() {
 
     case 'Security' :
         if (rfb_version >= 3.7) {
-            // Server sends supported list, client decides 
+            // Server sends supported list, client decides
             num_types = ws.rQshift8();
             if (ws.rQwait("security type", num_types, 1)) { return false; }
             if (num_types === 0) {
@@ -708,7 +712,7 @@ init_msg = function() {
             if (rfb_auth_scheme === 0) {
                 return fail("Unsupported security types: " + types);
             }
-            
+
             ws.send([rfb_auth_scheme]);
         } else {
             // Server decides
@@ -769,23 +773,32 @@ init_msg = function() {
                 response = genDES(rfb_password, challenge);
                 //Util.Debug("Response: " + response +
                 //           " (" + response.length + ")");
-                
+
                 //Util.Debug("Sending DES encrypted auth response");
                 ws.send(response);
                 updateState('SecurityResult');
                 return;
             case 16: // TightVNC Security Type
+                if (rfb_atenvnc) {
+		  ws.send_string(
+                    "testuser\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"+
+		    "testpass\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+	          );
+                  Util.Info(ws.rQshiftStr(24)); // padding
+                    updateState('SecurityResult');
+                } else {
+
                 if (ws.rQwait("num tunnels", 4)) { return false; }
                 var numTunnels = ws.rQshift32();
-                //console.log("Number of tunnels: "+numTunnels);
-
-                rfb_tightvnc = true;
+                console.log("Number of tunnels: "+numTunnels);
 
                 if (numTunnels != 0)
                 {
                     fail("Protocol requested tunnels, not currently supported. numTunnels: " + numTunnels);
                     return;
                 }
+
+                rfb_tightvnc = true;
 
                 var clientSupportedTypes = {
                     'STDVNOAUTH__': 1,
@@ -796,15 +809,15 @@ init_msg = function() {
 
                 if (ws.rQwait("sub auth count", 4)) { return false; }
                 var subAuthCount = ws.rQshift32();
-                //console.log("Sub auth count: "+subAuthCount);
+                console.log("Sub auth count: "+subAuthCount);
                 for (var i=0;i<subAuthCount;i++)
                 {
 
                     if (ws.rQwait("sub auth capabilities "+i, 16)) { return false; }
                     var capNum = ws.rQshift32();
                     var capabilities = ws.rQshiftStr(12);
-                    //console.log("queue: "+ws.rQlen());
-                    //console.log("auth type: "+capNum+": "+capabilities);
+                    console.log("queue: "+ws.rQlen());
+                    console.log("auth type: "+capNum+": "+capabilities);
 
                     serverSupportedTypes.push(capabilities);
                 }
@@ -813,7 +826,7 @@ init_msg = function() {
                 {
                     if (serverSupportedTypes.indexOf(authType) != -1)
                     {
-                        //console.log("selected authType "+authType);
+                        console.log("selected authType "+authType);
                         ws.send([0,0,0,clientSupportedTypes[authType]]);
 
                         switch (authType)
@@ -833,6 +846,7 @@ init_msg = function() {
                         }
                     }
                 }
+		}
 
 
                 return;
@@ -877,7 +891,6 @@ init_msg = function() {
 
     case 'ServerInitialisation' :
         if (ws.rQwait("server initialization", 24)) { return false; }
-
         /* Screen size */
         fb_width  = ws.rQshift16();
         fb_height = ws.rQshift16();
@@ -896,7 +909,7 @@ init_msg = function() {
         blue_shift     = ws.rQshift8();
         ws.rQshiftStr(3); // padding
 
-        Util.Info("Screen: " + fb_width + "x" + fb_height + 
+        Util.Info("Screen: " + fb_width + "x" + fb_height +
                   ", bpp: " + bpp + ", depth: " + depth +
                   ", big_endian: " + big_endian +
                   ", true_color: " + true_color +
@@ -921,7 +934,7 @@ init_msg = function() {
         name_length   = ws.rQshift32();
         fb_name = Util.decodeUTF8(ws.rQshiftStr(name_length));
         conf.onDesktopName(that, fb_name);
-        
+
         if (conf.true_color && fb_name === "Intel(r) AMT KVM")
         {
             Util.Warn("Intel AMT KVM only support 8/16 bit depths. Disabling true color");
@@ -935,24 +948,24 @@ init_msg = function() {
             var numClientMessages = ws.rQshift16();
             var numEncodings = ws.rQshift16();
             ws.rQshift16(); // padding
-            //console.log("numServerMessages "+numServerMessages);
-            //console.log("numClientMessages "+numClientMessages);
-            //console.log("numEncodings "+numEncodings);
+            console.log("numServerMessages "+numServerMessages);
+            console.log("numClientMessages "+numClientMessages);
+            console.log("numEncodings "+numEncodings);
 
             for (var i=0;i<numServerMessages;i++)
             {
                 var srvMsg = ws.rQshiftStr(16);
-                //console.log("server message: "+srvMsg);
+                console.log("server message: "+srvMsg);
             }
             for (var i=0;i<numClientMessages;i++)
             {
                 var clientMsg = ws.rQshiftStr(16);
-                //console.log("client message: "+clientMsg);
+                console.log("client message: "+clientMsg);
             }
             for (var i=0;i<numEncodings;i++)
             {
                 var encoding = ws.rQshiftStr(16);
-                //console.log("encoding: "+encoding);
+                console.log("encoding: "+encoding);
             }
         }
 
@@ -962,21 +975,28 @@ init_msg = function() {
         keyboard.grab();
         mouse.grab();
 
+//        conf.true_color=false;
         if (conf.true_color) {
-            fb_Bpp           = 4;
+            fb_Bpp           = 2;
             fb_depth         = 3;
         } else {
             fb_Bpp           = 1;
             fb_depth         = 1;
         }
 
-        response = pixelFormat();
-        response = response.concat(clientEncodings());
-        response = response.concat(fbUpdateRequests()); // initial fbu-request
+//        if (rfb_atenvnc) {
+          Util.Info(ws.rQshiftStr(12));
+          response = fbUpdateRequests();
+//        } else {
+//          response = pixelFormat();
+//          response = response.concat(clientEncodings());
+//          response = response.concat(fbUpdateRequests()); // initial fbu-request
+//        }
+
         timing.fbu_rt_start = (new Date()).getTime();
         timing.pixels = 0;
         ws.send(response);
-        
+
         checkEvents();
 
         if (conf.encrypt) {
@@ -1017,8 +1037,8 @@ normal_msg = function() {
         first_colour = ws.rQshift16(); // First colour
         num_colours = ws.rQshift16();
         if (ws.rQwait("SetColourMapEntries", num_colours*6, 6)) { return false; }
-        
-        for (c=0; c < num_colours; c+=1) { 
+
+        for (c=0; c < num_colours; c+=1) {
             red = ws.rQshift16();
             //Util.Debug("red before: " + red);
             red = parseInt(red / 256, 10);
@@ -1046,6 +1066,10 @@ normal_msg = function() {
         conf.clipboardReceive(that, text); // Obsolete
         conf.onClipboard(that, text);
         break;
+    case 57:
+        Util.Debug("Aten message 57: ");
+        Util.Info(ws.rQshiftStr(264));
+        break;
     case 250:  // XVP
         ws.rQshift8();  // Padding
         xvp_ver = ws.rQshift8();
@@ -1065,8 +1089,8 @@ normal_msg = function() {
         }
         break;
     default:
-        fail("Disconnected: illegal server message type " + msg_type);
         Util.Debug("ws.rQslice(0,30):" + ws.rQslice(0,30));
+        fail("Disconnected: illegal server message type " + msg_type);
         break;
     }
     //Util.Debug("<< normal_msg");
@@ -1077,14 +1101,14 @@ framebufferUpdate = function() {
     var now, hdr, fbu_rt_diff, ret = true;
 
     if (FBU.rects === 0) {
-        //Util.Debug("New FBU: ws.rQslice(0,20): " + ws.rQslice(0,20));
-        if (ws.rQwait("FBU header", 3)) {
-            ws.rQunshift8(0);  // FBU msg_type
-            return false;
-        }
+        Util.Debug("New FBU: ws.rQslice(0,20): " + ws.rQslice(0,20));
+//        if (ws.rQwait("FBU header", 3)) {
+//            ws.rQunshift8(0);  // FBU msg_type
+//            return false;
+//        }
         ws.rQshift8();  // padding
         FBU.rects = ws.rQshift16();
-        //Util.Debug("FramebufferUpdate, rects:" + FBU.rects);
+        Util.Debug("FramebufferUpdate, rects:" + FBU.rects);
         FBU.bytes = 0;
         timing.cur_fbu = 0;
         if (timing.fbu_rt_start > 0) {
@@ -1099,34 +1123,47 @@ framebufferUpdate = function() {
         }
         if (ws.rQwait("FBU", FBU.bytes)) { return false; }
         if (FBU.bytes === 0) {
-            if (ws.rQwait("rect header", 12)) { return false; }
+            if (ws.rQwait("rect header", 20)) { return false; }
             /* New FramebufferUpdate */
 
-            hdr = ws.rQshiftBytes(12);
+            hdr = ws.rQshiftBytes(20);
             FBU.x      = (hdr[0] << 8) + hdr[1];
             FBU.y      = (hdr[2] << 8) + hdr[3];
             FBU.width  = (hdr[4] << 8) + hdr[5];
             FBU.height = (hdr[6] << 8) + hdr[7];
             FBU.encoding = parseInt((hdr[8] << 24) + (hdr[9] << 16) +
                                     (hdr[10] << 8) +  hdr[11], 10);
+            FBU.unknown = parseInt((hdr[12] << 24) + (hdr[13] << 16) +
+                                 (hdr[14] << 8) +  hdr[15], 10);
+            FBU.dataLength = parseInt((hdr[16] << 24) + (hdr[17] << 16) +
+                                      (hdr[18] << 8) +  hdr[19], 10);
+        fb_width = FBU.width;
+        fb_height = FBU.height;
+        conf.onFBResize(that, fb_width, fb_height);
+        display.resize(fb_width, fb_height);
 
+	//    FBU.bytes = FBU.dataLength;
             conf.onFBUReceive(that,
                     {'x': FBU.x, 'y': FBU.y,
                      'width': FBU.width, 'height': FBU.height,
                      'encoding': FBU.encoding,
-                     'encodingName': encNames[FBU.encoding]});
+                     'encodingName': encNames[FBU.encoding],
+		     'unknown': FBU.unknown,
+                     'dataLength': FBU.dataLength});
 
             if (encNames[FBU.encoding]) {
                 // Debug:
-                /*
+
                 var msg =  "FramebufferUpdate rects:" + FBU.rects;
                 msg += " x: " + FBU.x + " y: " + FBU.y;
                 msg += " width: " + FBU.width + " height: " + FBU.height;
                 msg += " encoding:" + FBU.encoding;
                 msg += "(" + encNames[FBU.encoding] + ")";
+                msg += " unknown:" + FBU.unknown;
+                msg += " dataLength:" + FBU.dataLength;
                 msg += ", ws.rQlen(): " + ws.rQlen();
                 Util.Debug(msg);
-                */
+
             } else {
                 fail("Disconnected: unsupported encoding " +
                     FBU.encoding);
@@ -1153,12 +1190,14 @@ framebufferUpdate = function() {
                     (timing.fbu_rt_start > 0)) {
                 timing.full_fbu_total += timing.cur_fbu;
                 timing.full_fbu_cnt += 1;
+/*
                 Util.Info("Timing of full FBU, cur: " +
                           timing.cur_fbu + ", total: " +
                           timing.full_fbu_total + ", cnt: " +
                           timing.full_fbu_cnt + ", avg: " +
                           (timing.full_fbu_total /
                               timing.full_fbu_cnt));
+*/
             }
             if (timing.fbu_rt_start > 0) {
                 fbu_rt_diff = now - timing.fbu_rt_start;
@@ -1192,21 +1231,25 @@ framebufferUpdate = function() {
 //
 
 encHandlers.RAW = function display_raw() {
-    //Util.Debug(">> display_raw (" + ws.rQlen() + " bytes)");
+ //   Util.Debug(">> display_raw (" + ws.rQlen() + " bytes)");
 
-    var cur_y, cur_height;
+    var cur_y, cur_height, arr, rgb;
+    var data = [];
 
     if (FBU.lines === 0) {
+        ws.rQshiftStr(10);
         FBU.lines = FBU.height;
     }
     FBU.bytes = FBU.width * fb_Bpp; // At least a line
     if (ws.rQwait("RAW", FBU.bytes)) { return false; }
     cur_y = FBU.y + (FBU.height - FBU.lines);
     cur_height = Math.min(FBU.lines,
-                          Math.floor(ws.rQlen()/(FBU.width * fb_Bpp)));
+                          Math.floor(ws.rQlen()/(FBU.bytes)));
+
     display.blitImage(FBU.x, cur_y, FBU.width, cur_height,
             ws.get_rQ(), ws.get_rQi());
-    ws.rQshiftBytes(FBU.width * cur_height * fb_Bpp);
+    ws.rQshiftStr(FBU.width * cur_height * fb_Bpp);
+
     FBU.lines -= cur_height;
 
     if (FBU.lines > 0) {
@@ -1215,7 +1258,7 @@ encHandlers.RAW = function display_raw() {
         FBU.rects -= 1;
         FBU.bytes = 0;
     }
-    //Util.Debug("<< display_raw (" + ws.rQlen() + " bytes)");
+//    Util.Debug("<< display_raw (" + ws.rQlen() + " bytes)");
     return true;
 };
 
@@ -1240,7 +1283,7 @@ encHandlers.COPYRECT = function display_copy_rect() {
 };
 
 encHandlers.RRE = function display_rre() {
-    //Util.Debug(">> display_rre (" + ws.rQlen() + " bytes)");
+    Util.Debug(">> display_rre (" + ws.rQlen() + " bytes)");
     var color, x, y, width, height, chunk;
 
     if (FBU.subrects === 0) {
@@ -1259,8 +1302,8 @@ encHandlers.RRE = function display_rre() {
         display.fillRect(FBU.x + x, FBU.y + y, width, height, color);
         FBU.subrects -= 1;
     }
-    //Util.Debug("   display_rre: rects: " + FBU.rects +
-    //           ", FBU.subrects: " + FBU.subrects);
+    Util.Debug("   display_rre: rects: " + FBU.rects +
+               ", FBU.subrects: " + FBU.subrects);
 
     if (FBU.subrects > 0) {
         chunk = Math.min(rre_chunk_sz, FBU.subrects);
@@ -1269,7 +1312,7 @@ encHandlers.RRE = function display_rre() {
         FBU.rects -= 1;
         FBU.bytes = 0;
     }
-    //Util.Debug("<< display_rre, FBU.bytes: " + FBU.bytes);
+    Util.Debug("<< display_rre, FBU.bytes: " + FBU.bytes);
     return true;
 };
 
@@ -1277,7 +1320,7 @@ encHandlers.HEXTILE = function display_hextile() {
     //Util.Debug(">> display_hextile");
     var subencoding, subrects, color, cur_tile,
         tile_x, x, w, tile_y, y, h, xy, s, sx, sy, wh, sw, sh,
-        rQ = ws.get_rQ(), rQi = ws.get_rQi(); 
+        rQ = ws.get_rQ(), rQi = ws.get_rQi();
 
     if (FBU.tiles === 0) {
         FBU.tiles_x = Math.ceil(FBU.width/16);
@@ -1307,7 +1350,7 @@ encHandlers.HEXTILE = function display_hextile() {
 
         /* Figure out how much we are expecting */
         if (subencoding & 0x01) { // Raw
-            //Util.Debug("   Raw subencoding");
+            Util.Debug("   Raw subencoding");
             FBU.bytes += w * h * fb_Bpp;
         } else {
             if (subencoding & 0x02) { // Background
@@ -1328,7 +1371,6 @@ encHandlers.HEXTILE = function display_hextile() {
             }
         }
 
-        /*
         Util.Debug("   tile:" + cur_tile + "/" + (FBU.total_tiles - 1) +
               " (" + tile_x + "," + tile_y + ")" +
               " [" + x + "," + y + "]@" + w + "x" + h +
@@ -1338,7 +1380,6 @@ encHandlers.HEXTILE = function display_hextile() {
               ", ws.rQlen():" + ws.rQlen() + ", FBU.bytes:" + FBU.bytes +
               " last:" + ws.rQslice(FBU.bytes-10, FBU.bytes) +
               " next:" + ws.rQslice(FBU.bytes-1, FBU.bytes+10));
-        */
         if (ws.rQwait("hextile", FBU.bytes)) { return false; }
 
         /* We know the encoding and have a whole tile */
@@ -1429,7 +1470,7 @@ function display_tight(isTightPNG) {
 
     var ctl, cmode, clength, color, img, data;
     var filterId = -1, resetStreams = 0, streamId = -1;
-    var rQ = ws.get_rQ(), rQi = ws.get_rQi(); 
+    var rQ = ws.get_rQ(), rQi = ws.get_rQi();
 
     FBU.bytes = 1; // compression-control byte
     if (ws.rQwait("TIGHT compression-control", FBU.bytes)) { return false; }
@@ -1502,7 +1543,7 @@ function display_tight(isTightPNG) {
     };
     var handlePalette = function() {
         var numColors = rQ[rQi + 2] + 1;
-        var paletteSize = numColors * fb_depth; 
+        var paletteSize = numColors * fb_depth;
         FBU.bytes += paletteSize;
         if (ws.rQwait("TIGHT palette " + cmode, FBU.bytes)) { return false; }
 
@@ -1520,7 +1561,7 @@ function display_tight(isTightPNG) {
         if (ws.rQwait("TIGHT " + cmode, FBU.bytes)) { return false; }
 
         // Shift ctl, filter id, num colors, palette entries, and clength off
-        ws.rQshiftBytes(3); 
+        ws.rQshiftBytes(3);
         var palette = ws.rQshiftBytes(paletteSize);
         ws.rQshiftBytes(clength[0]);
 
@@ -1581,7 +1622,7 @@ function display_tight(isTightPNG) {
     resetStreams = ctl & 0xF;
 
     // Figure out filter
-    ctl = ctl >> 4; 
+    ctl = ctl >> 4;
     streamId = ctl & 0x3;
 
     if (ctl === 0x08)      cmode = "fill";
@@ -1673,8 +1714,114 @@ extract_data_uri = function(arr) {
     return ";base64," + Base64.encode(arr);
 };
 
+		var dataRead = 0;
+                var i = 0;
 encHandlers.TIGHT = function () { return display_tight(false); };
 encHandlers.TIGHT_PNG = function () { return display_tight(true); };
+encHandlers.HermonVideo = function () {
+    return encHandlers.RAW();
+    Util.Debug(">> display_hermon (" + ws.rQlen() + " bytes)");
+
+    var cur_y, cur_height, arr, rgb;
+    var data = [];
+
+//    FBU.bytes = FBU.width * fb_Bpp; // At least a line
+    FBU.bytes = 1448;
+
+    if (ws.rQwait("RAW", FBU.bytes)) {
+      console.log("no data enough");
+      return false; }
+    if (FBU.dataLength === 1572874) {
+   console.log("BYTES: "+FBU.dataLength);
+        if (ws.rQwait("RAW", 2)) {
+	       console.log("no data enough");
+ return false; }
+//        hdr = ws.rQshiftBytes(2);
+//        FBU.unknown = parseInt((hdr[0] << 24) + (hdr[1] << 16) +
+//                               (hdr[2] << 8) +  hdr[3], 10);
+//        FBU.dataLength = parseInt((hdr[3] << 24) + (hdr[4] << 16) +
+//                                    (hdr[5] << 8) +  hdr[6], 10);
+        FBU.dataLength -= 10;
+
+    }
+    cur_y = FBU.y; // + (FBU.height - FBU.lines);
+    cur_height = 1; //Math.min(FBU.lines,
+                      //    Math.floor(ws.rQlen()/(FBU.width * fb_Bpp)));
+   console.log("cur_y: "+cur_y+" | cur_height: "+cur_height+" | bytes: "+FBU.bytes);
+
+
+    display.blitImage(FBU.x, cur_y, FBU.width, cur_height,
+            ws.get_rQ(), ws.get_rQi());
+    var buffer = ws.rQshiftStr(FBU.bytes);
+    FBU.lines++;
+
+    FBU.dataLength -= buffer.length;
+/*
+    var i = 0;
+    var j = 0;
+    for (i=0, j=0; j < arr.length/3; i=i+4, j=j+3) {
+        data[i    ] = arr[j    ];
+        data[i + 1] = arr[j + 1];
+        data[i + 2] = arr[j + 2];
+        data[i + 3] = 255; // Set Alpha
+    }
+
+     display.blitImage(FBU.x, cur_y, FBU.width, cur_height, arr, 0);
+
+//    if (FBU.lines > 0) {
+//        FBU.bytes = FBU.width * fb_Bpp; // At least another line
+//    } else {
+//        FBU.rects -= 1;
+//        FBU.bytes = 0;
+//    }
+*/
+//    if (FBU.bytes < 1024) { FBU.rects = 0;  return true; }
+
+    Util.Debug("<< display_hermon (" + ws.rQlen() + " bytes)");
+    return true;
+
+            return encHandlers.RAW();
+
+            var hdr = ws.rQshiftBytes(20);
+            FBU.x      = (hdr[0] << 8) + hdr[1];
+            FBU.y      = (hdr[2] << 8) + hdr[3];
+            FBU.width  = (hdr[4] << 8) + hdr[5];
+            FBU.height = (hdr[6] << 8) + hdr[7];
+            FBU.encoding = parseInt((hdr[8] << 24) + (hdr[9] << 16) +
+                                    (hdr[10] << 8) +  hdr[11], 10);
+            FBU.unknown = parseInt((hdr[12] << 24) + (hdr[13] << 16) +
+                                    (hdr[14] << 8) +  hdr[15], 10);
+            FBU.dataLength = parseInt((hdr[16] << 24) + (hdr[17] << 16) +
+                                    (hdr[18] << 8) +  hdr[19], 10);
+                var msg =  "FramebufferUpdate rects:" + FBU.rects;
+                msg += " x: " + FBU.x + " y: " + FBU.y;
+                msg += " width: " + FBU.width + " height: " + FBU.height;
+                msg += " encoding:" + FBU.encoding;
+                msg += "(" + encNames[FBU.encoding] + ")";
+                msg += " unknown:" + FBU.unknown;
+                msg += " dataLength:" + FBU.dataLength;
+                msg += ", ws.rQlen(): " + ws.rQlen();
+                Util.Debug(msg);
+
+	    return true;
+
+		return encHandlers.RAW();
+		buffer = ws.rQshiftBytes(FBU.bytes);
+                FBU.bytes -= buffer.length;
+	        if (FBU.bytes > 0) { return false; } else { return true; }
+		// return encHandlers.HEXTILE();
+
+		var buffer;
+		while (dataRead < FBU.dataLength) {
+		  i++;
+//                Util.Debug("ws.rQslice(0,"+FBU.dataLength+"): " + ws.rQslice(0,FBU.dataLength) + " (" + ws.rQlen() + ")");
+		  dataRead += buffer.length;
+		  if (i < 10){
+	          Util.Debug("buffer: "+ buffer.length);
+}
+		}
+		return true;
+}
 
 encHandlers.last_rect = function last_rect() {
     //Util.Debug(">> last_rect");
@@ -1774,7 +1921,7 @@ clientEncodings = function() {
             Util.Debug("Skipping Cursor pseudo-encoding");
 
         // TODO: remove this when we have tight+non-true-color
-        } else if ((encodings[i][0] === "TIGHT") && 
+        } else if ((encodings[i][0] === "TIGHT") &&
                    (! conf.true_color)) {
             Util.Warn("Skipping tight, only support with true color");
         } else {
@@ -1835,9 +1982,13 @@ keyEvent = function(keysym, down) {
     //Util.Debug(">> keyEvent, keysym: " + keysym + ", down: " + down);
     var arr;
     arr = [4];  // msg-type
+    arr.push8(0);
     arr.push8(down);
     arr.push16(0);
     arr.push32(keysym);
+    arr.push32(0);
+    arr.push32(0);
+    arr.push8(0);
     //Util.Debug("<< keyEvent");
     return arr;
 };
@@ -1847,9 +1998,21 @@ pointerEvent = function(x, y) {
     //           " , mask: " + mouse_buttonMask);
     var arr;
     arr = [5];  // msg-type
+    arr.push8(0);     // padding
     arr.push8(mouse_buttonMask);
     arr.push16(x);
     arr.push16(y);
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
+    arr.push8(0);     // padding
     //Util.Debug("<< pointerEvent");
     return arr;
 };

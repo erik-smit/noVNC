@@ -533,11 +533,18 @@ bgrxImageData = function(x, y, vx, vy, width, height, arr, offset) {
     */
     img = c_ctx.createImageData(width, height);
     data = img.data;
-    for (i=0, j=offset; i < (width * height * 4); i=i+4, j=j+4) {
-        data[i    ] = arr[j + 2];
-        data[i + 1] = arr[j + 1];
-        data[i + 2] = arr[j    ];
-        data[i + 3] = 255; // Set Alpha
+    for (i=0, j=offset; i < (width * height * 4); i=i+4, j=j+2) {
+       var b1 = arr[j];
+       var b2= arr[j+1];
+
+       var blue = 8 * (b1 & 0x1F); 
+       var green = ((b1 & 0xE0) >> 2) | ((b2 & 0x3) << 6);
+       var red  = 2 * (b2 & 0x7C);
+
+       data[i    ] = red; 
+       data[i + 1] = green; 
+       data[i + 2] = blue;
+       data[i + 3] = 255;
     }
     c_ctx.putImageData(img, x - vx, y - vy);
 };
