@@ -24,7 +24,7 @@ function Display(defaults) {
 
         // Predefine function variables (jslint)
         imageDataGet, rgbImageData, bgrxImageData, cmapImageData,
-        setFillColor, rescale, scan_renderQ,
+        hermon16ImageData, hermon8ImageData, setFillColor, rescale, scan_renderQ,
 
         // The full frame buffer (logical canvas) size
         fb_width = 0,
@@ -636,6 +636,55 @@ function Display(defaults) {
         c_ctx.putImageData(img, x - vx, y - vy);
     };
 
+    hermon16ImageData = function(x, y, vx, vy, width, height, arr, offset) {
+        var img, i, j, data;
+
+        img = c_ctx.createImageData(width, height);
+        data = img.data;
+        for (i = 0, j = offset; i < (width * height * 4); i = i + 4, j = j + 2) {
+            var b1 = arr[j];
+            var b2 = arr[j + 1];
+
+            //      *(_BYTE *)(a4 + v8 + 1) = (*(_BYTE *)(a3 + v9) & 3) << 6;
+            //      *(_BYTE *)(a4 + v8 + 2) = 16 * (*(_BYTE *)(a3 + v9) & 0xC);
+            //      result = 4 * (*(_BYTE *)(a3 + v9) & 0x30);
+
+            var blue = 8 * (b1 & 0x1F);
+            var green = ((b1 & 0xE0) >> 2) | ((b2 & 0x3) << 6);
+            var red = 2 * (b2 & 0x7C);
+
+            data[i] = red;
+            data[i + 1] = green;
+            data[i + 2] = blue;
+            data[i + 3] = 255;
+        }
+        c_ctx.putImageData(img, x - vx, y - vy);
+    };
+
+    hermon8ImageData = function(x, y, vx, vy, width, height, arr, offset) {
+        var img, i, j, data;
+
+        img = c_ctx.createImageData(width, height);
+        data = img.data;
+        for (i = 0, j = offset; i < (width * height * 4); i = i + 4, j = j + 1) {
+            var b1 = arr[j];
+
+            //      *(_BYTE *)(a4 + v5 + 1) = 8 * (*(_BYTE *)(a3 + v6) & 0x1F);
+            //      *(_BYTE *)(a4 + v5 + 2) = ((*(_BYTE *)(a3 + v6) & 0xE0) >> 2) | (*(_BYTE *)(a3 + v6 + 1) << 6);
+            //      result = 2 * (*(_BYTE *)(a3 + v6 + 1) & 0x7C);
+
+            var blue = 8 * (b1 & 3) << 6;
+            var green = 16 * (b1 & 0xC);
+            var red = 4 * (b1 & 0x30);
+
+            data[i] = red;
+            data[i + 1] = green;
+            data[i + 2] = blue;
+            data[i + 3] = 255;
+        }
+        c_ctx.putImageData(img, x - vx, y - vy);
+    };
+
     cmapImageData = function(x, y, vx, vy, width, height, arr, offset) {
         var img, i, j, data, bgr, cmap;
         img = c_ctx.createImageData(width, height);
@@ -666,6 +715,14 @@ function Display(defaults) {
             // prolly wrong...
             cmapImageData(x, y, viewport.x, viewport.y, width, height, arr, offset);
         }
+    };
+
+    that.blitHermon16Image = function(x, y, width, height, arr, offset) {
+        hermon16ImageData(x, y, viewport.x, viewport.y, width, height, arr, offset);
+    };
+
+    that.blitHermon8Image = function(x, y, width, height, arr, offset) {
+        hermon8ImageData(x, y, viewport.x, viewport.y, width, height, arr, offset);
     };
 
     that.blitStringImage = function(str, x, y) {
