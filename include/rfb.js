@@ -583,17 +583,18 @@ function RFB(defaults) {
                 Util.Error("Got data while disconnected");
                 break;
             case 'normal':
-                if (normal_msg() && ws.rQlen() > 0) {
+                normal_msg();
+                if (ws.rQlen() > 0) {
                     // true means we can continue processing
                     // Give other events a chance to run
                     if (msgTimer === null) {
-                        Util.Debug("More data to process, creating timer");
+                        //Util.Debug("More data to process, creating timer");
                         msgTimer = setTimeout(function() {
                             msgTimer = null;
                             handle_message();
                         }, 10);
                     } else {
-                        Util.Debug("More data to process, existing timer");
+                        //Util.Debug("More data to process, existing timer");
                     }
                 }
                 break;
@@ -684,8 +685,8 @@ function RFB(defaults) {
             return;
         } // View only, skip mouse events
 
-        //mouse_arr = mouse_arr.concat(
-        //        pointerEvent(display.absX(x), display.absY(y)));
+        mouse_arr = mouse_arr.concat(
+                pointerEvent(display.absX(x), display.absY(y)));
 
         checkEvents();
     };
@@ -1371,7 +1372,7 @@ function RFB(defaults) {
 
     encHandlers.RAW = conf.rfb_aten 
         ? function discard_bytes() {
-                    Util.Debug(">> RAW (0,256): " + ws.rQslice(0, 256));
+//                    Util.Debug(">> RAW (0,256): " + ws.rQslice(0, 256));
           if (FBU.bytes === 0) {
 //            if (ws.rQwait("Discard", FBU.bytes)) 
 //              return false;
@@ -1400,7 +1401,7 @@ function RFB(defaults) {
             }
 */
             
-            if (FBU.dataLength == 10) { FBU.bytes = 0; ws.rQshift32(); return true; }
+            if (FBU.dataLength == 10) { FBU.bytes = 0;  FBU.rects -= 1; return true; }
             FBU.dataLength -= 10;
 //            FBU.subrects = (FBU.dataLength-10) / 512; // tile_size;
 //            switch (encoding) {
@@ -1415,17 +1416,17 @@ function RFB(defaults) {
 
 	
           } 
-          if (FBU.dataLength > 518) {
+//          if (FBU.dataLength > 518) {
 	    FBU.bytes = 518;
-          } else {
-	    FBU.bytes = FBU.dataLength;
-          }
+//          } else {
+//	    FBU.bytes = FBU.dataLength;
+//          }
 function swap16(val) {
     return ((val & 0xFF) << 8)
            | ((val >> 8) & 0xFF);
 }
 
-          Util.Debug("ws.rQslice(0,256): " + ws.rQslice(0, 256));
+          //Util.Debug("ws.rQslice(0,256): " + ws.rQslice(0, 256));
           if (ws.rQwait("Discard", FBU.bytes)) {
             return false;
           }
@@ -1433,7 +1434,7 @@ function swap16(val) {
           var b = swap16(ws.rQshift16());	
           var x = ws.rQshift8();	
           var y = ws.rQshift8();	
-          Util.Debug("a:" + a + "b: " + b + ", x: " + x + ", y: " + y);
+          //Util.Debug("a:" + a + "b: " + b + ", x: " + x + ", y: " + y);
           display.blitHermon16Image(y*16, x*16, 16, 16,
             ws.get_rQ(), ws.get_rQi());
           var shifted = ws.rQshiftBytes(FBU.bytes-6);
@@ -2171,7 +2172,6 @@ function swap16(val) {
     };
 
     fbUpdateRequest = function(incremental, x, y, xw, yw) {
-        //Util.Debug(">> fbUpdateRequest");
         if (typeof(x) === "undefined") {
             x = 0;
         }
@@ -2191,7 +2191,6 @@ function swap16(val) {
         arr.push16(y);
         arr.push16(xw);
         arr.push16(yw);
-        //Util.Debug("<< fbUpdateRequest");
         return arr;
     };
 
@@ -2232,11 +2231,10 @@ function swap16(val) {
     };
 
     pointerEvent = function(x, y) {
-        Util.Debug(">> pointerEvent, x,y: " + x + "," + y +
-                   " , mask: " + mouse_buttonMask);
+        //Util.Debug(">> pointerEvent, x,y: " + x + "," + y +
+        //           " , mask: " + mouse_buttonMask);
         var arr;
         arr = [5]; // msg-type
-//        arr.push8(0); // padding
         arr.push8(0); // padding
         arr.push8(mouse_buttonMask);
         arr.push16(x);
