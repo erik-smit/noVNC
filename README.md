@@ -2,7 +2,7 @@
 
 ## Notes
 
-### RFB message types  
+### RFB client message types  
 
 |  Hex   | Dec  |  Function                          |
 |--------|------|------------------------------------|
@@ -30,5 +30,4 @@
 |  0x3d  |  61  |  RFBProtocol::SetViewerLang        |
 |  0x3e  |  62  |  RFBProtocol::GetKBLedStatus       |
 
-
-
+### RFB server message types  
